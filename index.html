@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中國醫餐廳隨機推薦 - 雙校區整合版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .select-btn {
+            cursor: pointer;
+            border-width: 1px;
+            border-color: #d1d5db;
+            border-radius: 0.5rem;
+            background-color: #f3f4f6;
+            color: #4b5563;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        /* 主題顏色定義 */
+        .theme-shuinan .selected-search,
+        .theme-shuinan .selected-add {
+            background-color: #059669;
+            color: white;
+            border-color: #047857;
+        }
+
+        .theme-yingcai .selected-search,
+        .theme-yingcai .selected-add {
+            background-color: #2563eb;
+            color: white;
+            border-color: #1d4ed8;
+        }
+
+        .theme-shuinan .bg-primary {
+            background-color: #059669;
+        }
+
+        .theme-yingcai .bg-primary {
+            background-color: #2563eb;
+        }
+
+        .theme-shuinan .text-primary {
+            color: #059669;
+        }
+
+        .theme-yingcai .text-primary {
+            color: #2563eb;
+        }
+
+        .custom-range-thumb::-webkit-slider-thumb {
+            appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 9999px;
+            background: currentColor;
+        }
+    </style>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDWQdux7ox45xJCKpQD_RAOAiYdXaUQ2vk",
+            authDomain: "restaurantpickerweb.firebaseapp.com",
+            projectId: "restaurantpickerweb",
+            storageBucket: "restaurantpickerweb.firebasestorage.app",
+            messagingSenderId: "282000748766",
+            appId: "1:282000748766:web:9fae1c504f383a0c04924f"
+        };
+        const appId = "restaurantpickerweb";
+
+        let db, auth, userId = null, isAuthReady = false, unsubscribe = null;
+
+        // 全域狀態：改為預設英才
+        window.currentCampus = 'yingcai';
+        window.userRecommendations = [];
+        window.searchStaples = []; window.newStaples = [];
+        window.searchServices = []; window.newServices = [];
+        window.searchMeals = []; window.newMeals = [];
+
+        const CAMPUS_CONFIG = {
+            yingcai: {
+                name: '英才校區',
+                path: `artifacts/${appId}/public/data/restaurants`,
+                theme: 'theme-yingcai',
+                icon: '🚶',
+                distText: '走路'
+            },
+            shuinan: {
+                name: '水湳校區',
+                path: `artifacts/${appId}/public/Shuinan/restaurants`,
+                theme: 'theme-shuinan',
+                icon: '🛵',
+                distText: '騎車'
+            }
+        };
+
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                await signInAnonymously(auth);
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        isAuthReady = true;
+                        switchCampus(window.currentCampus);
+                    }
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        function switchCampus(campusId) {
+            window.currentCampus = campusId;
+            const config = CAMPUS_CONFIG[campusId];
+
+            // 更新 UI 樣式
+            document.body.className = `bg-gray-50 min-h-screen ${config.theme}`;
+            document.getElementById('header-title').textContent = `🍜 中國醫${config.name}協作餐廳推薦`;
+            document.querySelectorAll('.dist-label').forEach(el => el.textContent = config.distText);
+            document.querySelectorAll('.dist-icon').forEach(el => el.textContent = config.icon);
+
+            // 更新 Tab 樣式
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                const isActive = btn.dataset.campus === campusId;
+                btn.className = `tab-btn flex-1 py-3 text-center font-bold transition ${isActive ? 'bg-white text-primary shadow-inner' : 'bg-gray-200 text-gray-500 hover:bg-gray-100'}`;
+            });
+
+            // 重新監聽資料
+            if (unsubscribe) unsubscribe();
+            const q = collection(db, config.path);
+            unsubscribe = onSnapshot(q, (snapshot) => {
+                window.userRecommendations = snapshot.docs.map(doc => ({
+                    id: doc.id, ...doc.data(),
+                    price: parseInt(doc.data().price || 0),
+                    walk_time: parseInt(doc.data().walk_time || 0)
+                }));
+                document.getElementById('user-count').textContent = window.userRecommendations.length;
+                document.getElementById('status-message').textContent = `✅ ${config.name}服務已就緒。`;
+            });
+
+            resetResults();
+        }
+
+        function resetResults() {
+            document.getElementById('result-display').classList.add('hidden');
+            document.getElementById('initial-prompt-title').classList.remove('hidden');
+            document.getElementById('initial-prompt-title').textContent = '💡 請點選開始隨機推薦';
+            document.getElementById('initial-prompt').classList.remove('hidden');
+            document.getElementById('result-list').innerHTML = '<li class="p-4 text-center text-gray-500">切換校區成功，請重新篩選</li>';
+        }
+
+        window.searchAndRecommend = function () {
+            if (!isAuthReady) return;
+            if (window.searchServices.length === 0 || window.searchMeals.length === 0) {
+                alertModal('篩選錯誤', '請至少選擇一項服務類型與用餐時段。');
+                return;
+            }
+
+            const maxPrice = parseInt(document.getElementById('max_twd_price_search').value);
+            const maxTime = parseInt(document.getElementById('max_walk_time_search').value);
+            const config = CAMPUS_CONFIG[window.currentCampus];
+
+            const filtered = window.userRecommendations.filter(r => {
+                const pMatch = r.price === 0 || r.price <= maxPrice;
+                const tMatch = r.walk_time === 0 || r.walk_time <= maxTime;
+                const sMatch = window.searchStaples.length === 0 || window.searchStaples.some(s => (r.staple || []).includes(s));
+                const svMatch = window.searchServices.some(s => (r.service_type || []).includes(s));
+                const mMatch = window.searchMeals.some(s => (r.meal_type || []).includes(s));
+                return pMatch && tMatch && sMatch && svMatch && mMatch;
+            });
+
+            const listContainer = document.getElementById('result-list');
+            listContainer.innerHTML = '';
+
+            if (filtered.length === 0) {
+                document.getElementById('result-display').classList.add('hidden');
+                document.getElementById('initial-prompt-title').textContent = '❌ 沒有符合條件的餐廳';
+                listContainer.innerHTML = '<li class="p-4 text-center text-gray-500">找不到餐廳，試試放寬條件？</li>';
+                return;
+            }
+
+            const chosen = filtered[Math.floor(Math.random() * filtered.length)];
+
+            document.getElementById('initial-prompt').classList.add('hidden');
+            document.getElementById('result-display').classList.remove('hidden');
+            document.getElementById('initial-prompt-title').textContent = '🎉 恭喜！隨機推薦結果';
+            document.getElementById('chosen-name').textContent = chosen.name;
+            document.getElementById('chosen-price').textContent = `預估價格: ${chosen.price || '不確定'} 元`;
+            document.getElementById('chosen-walk-time').textContent = `${chosen.walk_time || '?'} 分鐘路程 ${config.icon}`;
+            document.getElementById('chosen-info').textContent = `${(chosen.service_type || []).join('/')} | ${(chosen.meal_type || []).join('/')} | ${(chosen.staple || []).join('/')}`;
+
+            const mapLink = document.getElementById('chosen-map-link');
+            mapLink.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(chosen.name)}`;
+
+            filtered.forEach((r, i) => {
+                const li = document.createElement('li');
+                li.className = 'p-3 border-b border-gray-100 flex justify-between items-center hover:bg-gray-50';
+                li.innerHTML = `
+                    <div>
+                        <span class="font-bold text-gray-800">${i + 1}. ${r.name}</span>
+                        <div class="text-xs text-gray-500">${(r.service_type || []).join('/')} | ${(r.staple || []).join(',')}</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-sm font-medium text-primary">${r.price}元</div>
+                        <div class="text-xs text-yellow-600">${r.walk_time}分 ${config.icon}</div>
+                    </div>`;
+                listContainer.appendChild(li);
+            });
+        }
+
+        window.submitRecommendation = async function (e) {
+            e.preventDefault();
+            if (window.newStaples.length === 0 || window.newServices.length === 0 || window.newMeals.length === 0) {
+                alertModal('錯誤', '請填寫完整類型資訊。'); return;
+            }
+
+            const form = e.target;
+            const config = CAMPUS_CONFIG[window.currentCampus];
+            const data = {
+                name: form.new_name.value.trim(),
+                price: parseInt(form.new_twd_price.value),
+                walk_time: parseInt(form.new_walk_time.value),
+                staple: window.newStaples,
+                service_type: window.newServices,
+                meal_type: window.newMeals,
+                addedBy: userId,
+                timestamp: Date.now()
+            };
+
+            try {
+                await addDoc(collection(db, config.path), data);
+                alertModal('成功', `✅ ${data.name} 已加入${config.name}列表！`);
+                form.reset();
+                syncButtonsWithState();
+            } catch (err) { alertModal('失敗', err.message); }
+        }
+
+        window.alertModal = (title, msg) => {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = msg;
+            document.getElementById('custom-modal').classList.remove('hidden');
+        };
+
+        window.updateRangeDisplay = (id, displayId) => {
+            document.getElementById(displayId).textContent = document.getElementById(id).value;
+        };
+
+        function syncButtonsWithState() {
+            document.querySelectorAll('.select-btn').forEach(btn => {
+                const val = btn.dataset.value;
+                const isSearch = btn.closest('#search-filter') !== null;
+                const type = btn.dataset.type;
+                let stateArr = isSearch ?
+                    (type === 'staple' ? window.searchStaples : type === 'service' ? window.searchServices : window.searchMeals) :
+                    (type === 'staple' ? window.newStaples : type === 'service' ? window.newServices : window.newMeals);
+
+                btn.classList.toggle(isSearch ? 'selected-search' : 'selected-add', stateArr.includes(val));
+            });
+        }
+
+        window.toggleSelection = (btn) => {
+            const val = btn.dataset.value;
+            const type = btn.dataset.type;
+            const isSearch = btn.closest('#search-filter') !== null;
+            let stateArr = isSearch ?
+                (type === 'staple' ? window.searchStaples : type === 'service' ? window.searchServices : window.searchMeals) :
+                (type === 'staple' ? window.newStaples : type === 'service' ? window.newServices : window.newMeals);
+
+            const index = stateArr.indexOf(val);
+            if (index > -1) {
+                if ((type !== 'staple') && stateArr.length === 1) return alertModal('提示', '至少需保留一項');
+                stateArr.splice(index, 1);
+            } else {
+                stateArr.push(val);
+            }
+            syncButtonsWithState();
+        };
+
+        window.onload = () => {
+            initFirebase();
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.onclick = () => switchCampus(btn.dataset.campus);
+            });
+            document.querySelectorAll('.select-btn').forEach(btn => {
+                btn.onclick = () => window.toggleSelection(btn);
+            });
+            document.getElementById('search-button').onclick = window.searchAndRecommend;
+            document.getElementById('add-form').onsubmit = window.submitRecommendation;
+        };
+    </script>
+</head>
+
+<body class="bg-gray-50 min-h-screen theme-yingcai">
+    <div id="custom-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 hidden flex items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-gray-900"></h3>
+            <p id="modal-message" class="text-gray-600 mb-4"></p>
+            <button onclick="document.getElementById('custom-modal').classList.add('hidden')"
+                class="w-full bg-primary text-white py-2 rounded-lg font-semibold">確定</button>
+        </div>
+    </div>
+
+    <div class="container mx-auto p-4 max-w-6xl">
+        <div class="bg-white rounded-2xl shadow-xl overflow-hidden">
+            <nav class="flex border-b">
+                <button data-campus="yingcai"
+                    class="tab-btn flex-1 py-3 text-center font-bold bg-white text-primary">英才校區 🚶</button>
+                <button data-campus="shuinan"
+                    class="tab-btn flex-1 py-3 text-center font-bold bg-gray-200 text-gray-500">水湳校區 🛵</button>
+            </nav>
+
+            <header class="p-6 bg-primary text-white transition-colors duration-500">
+                <h1 id="header-title" class="text-2xl sm:text-3xl font-extrabold mb-1">🍜 中國醫英才校區協作餐廳推薦</h1>
+            </header>
+
+            <div class="p-4 border-b bg-gray-50">
+                <p id="status-message" class="text-sm font-medium text-primary">載入中...</p>
+            </div>
+
+            <div class="lg:flex p-4 lg:p-6 space-y-8 lg:space-y-0 lg:space-x-8">
+                <div class="lg:w-2/3 space-y-6">
+                    <section id="search-filter" class="bg-white p-5 rounded-xl border shadow-sm">
+                        <h2 class="text-lg font-bold text-gray-700 mb-4 border-b pb-2">🔍 搜尋篩選</h2>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-600 mb-1">最高預算: <span
+                                        id="search-price-display" class="font-bold text-primary">400</span> 元</label>
+                                <input type="range" id="max_twd_price_search" min="0" max="800" value="400" step="100"
+                                    oninput="updateRangeDisplay('max_twd_price_search','search-price-display')"
+                                    class="w-full text-primary custom-range-thumb">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-600 mb-1">最大<span
+                                        class="dist-label">走路</span>距離: <span id="search-walk-time-display"
+                                        class="font-bold text-primary">10</span> 分鐘</label>
+                                <input type="range" id="max_walk_time_search" min="0" max="20" value="10"
+                                    oninput="updateRangeDisplay('max_walk_time_search','search-walk-time-display')"
+                                    class="w-full text-primary custom-range-thumb">
+                            </div>
+                        </div>
+
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">服務類型</label>
+                                <div class="flex gap-2">
+                                    <button class="select-btn" data-type="service" data-value="內用">內用</button>
+                                    <button class="select-btn" data-type="service" data-value="外帶">外帶</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">時段</label>
+                                <div class="flex gap-2">
+                                    <button class="select-btn" data-type="meal" data-value="早餐">早餐</button>
+                                    <button class="select-btn" data-type="meal" data-value="午餐">午餐</button>
+                                    <button class="select-btn" data-type="meal" data-value="晚餐">晚餐</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button id="search-button"
+                            class="w-full mt-6 bg-primary text-white font-bold py-3 rounded-xl shadow-lg hover:opacity-90 transition">🍽️
+                            開始隨機推薦</button>
+                    </section>
+
+                    <section id="recommendation-card"
+                        class="bg-green-50 p-6 rounded-xl border-2 border-primary border-dashed">
+                        <h3 id="initial-prompt-title" class="text-xl font-extrabold text-primary mb-2">💡 請點選開始隨機推薦</h3>
+                        <div id="initial-prompt" class="text-gray-500">設定篩選條件，看看今天吃什麼好呢？</div>
+                        <div id="result-display" class="hidden">
+                            <p id="chosen-name" class="text-3xl font-black text-primary mb-1"></p>
+                            <a id="chosen-map-link" href="#" target="_blank"
+                                class="text-blue-500 text-sm underline mb-2 inline-block">在 Google 地圖中查看</a>
+                            <div id="chosen-info" class="text-sm text-gray-600 mb-2"></div>
+                            <div class="flex gap-4 font-bold">
+                                <span id="chosen-walk-time" class="text-yellow-600"></span>
+                                <span id="chosen-price" class="text-primary"></span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section>
+                        <h2 class="text-lg font-bold text-gray-700 mb-3">📋 符合條件列表</h2>
+                        <ul id="result-list" class="bg-white rounded-xl border divide-y"></ul>
+                    </section>
+                </div>
+
+                <div class="lg:w-1/3">
+                    <section class="bg-gray-100 p-5 rounded-xl shadow-inner">
+                        <h2 class="text-lg font-bold text-gray-700 mb-4">📝 新增推薦</h2>
+                        <p class="text-xs text-gray-500 mb-4">已有 <span id="user-count"
+                                class="font-bold text-primary text-base">0</span> 筆協作資料</p>
+                        <form id="add-form" class="space-y-4">
+                            <input type="text" name="new_name" placeholder="店名" required
+                                class="w-full p-2 border rounded-lg">
+
+                            <div>
+                                <label class="block text-sm text-gray-600">價格估計: <span
+                                        id="price-display">400</span>元</label>
+                                <input type="range" name="new_twd_price" id="new_twd_price" min="0" max="800" step="100"
+                                    value="400" oninput="updateRangeDisplay('new_twd_price','price-display')"
+                                    class="w-full text-primary custom-range-thumb">
+                            </div>
+
+                            <div>
+                                <label class="block text-sm text-gray-600"><span class="dist-label">走路</span>時間: <span
+                                        id="walk-time-display">10</span>分</label>
+                                <input type="range" name="new_walk_time" id="new_walk_time" min="0" max="20" value="10"
+                                    oninput="updateRangeDisplay('new_walk_time','walk-time-display')"
+                                    class="w-full text-primary custom-range-thumb">
+                            </div>
+
+                            <div class="space-y-2">
+                                <label class="block text-xs font-bold text-gray-400 uppercase">類型標籤 (點選)</label>
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="select-btn text-xs" data-type="staple"
+                                        data-value="飯">飯</button>
+                                    <button type="button" class="select-btn text-xs" data-type="staple"
+                                        data-value="麵">麵</button>
+                                    <button type="button" class="select-btn text-xs" data-type="staple"
+                                        data-value="其他">其他</button>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="select-btn text-xs" data-type="service"
+                                        data-value="內用">內用</button>
+                                    <button type="button" class="select-btn text-xs" data-type="service"
+                                        data-value="外帶">外帶</button>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="select-btn text-xs" data-type="meal"
+                                        data-value="早餐">早餐</button>
+                                    <button type="button" class="select-btn text-xs" data-type="meal"
+                                        data-value="午餐">午餐</button>
+                                    <button type="button" class="select-btn text-xs" data-type="meal"
+                                        data-value="晚餐">晚餐</button>
+                                </div>
+                            </div>
+
+                            <button id="add-button" type="submit"
+                                class="w-full bg-primary text-white font-bold py-3 rounded-xl transition">💾
+                                儲存並分享</button>
+                        </form>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
